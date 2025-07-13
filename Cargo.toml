@@ -28,7 +28,12 @@ windows-sys = { version = "0.60", features = [
 ] }
 serde_json = "1"
 
-[lib]
-crate-type = ["cdylib"]
-name = "hutao_minhook"
-path = "src/hutao_minhook.rs"
+[workspace]
+members = [
+    "hutao_minhook",
+    "bilibili_login"
+]
+
+[[example]]
+name = "bilibili_injector"
+path = "tmp/bilibili/genshin_bili_injector.rs"

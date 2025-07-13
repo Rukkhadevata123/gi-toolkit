@@ -1,0 +1,13 @@
+[package]
+name = "hutao_minhook"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+min_hook_rs = "2.1"
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+] }
+
+[lib]
+crate-type = ["cdylib"]

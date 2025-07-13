@@ -9,7 +9,9 @@ use std::thread;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Security::*;
+use windows_sys::Win32::System::Diagnostics::Debug::*;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
+use windows_sys::Win32::System::Environment::*;
 use windows_sys::Win32::System::LibraryLoader::*;
 use windows_sys::Win32::System::Memory::*;
 use windows_sys::Win32::System::Threading::*;
@@ -77,8 +79,9 @@ pub struct Launcher {
     // Inner state
     shared_mem_handle: Option<HANDLE>,
     shared_mem_ptr: Option<*mut IslandEnvironment>,
-    game_process: Option<HANDLE>,
     game_pid: u32,
+    game_process: Option<HANDLE>,
+    game_thread: Option<HANDLE>,
 }
 
 impl Default for Launcher {
@@ -94,8 +97,9 @@ impl Default for Launcher {
             redirect_craft: true,
             shared_mem_handle: None,
             shared_mem_ptr: None,
-            game_process: None,
             game_pid: 0,
+            game_process: None,
+            game_thread: None,
         }
     }
 }
@@ -220,15 +224,29 @@ impl Launcher {
             }
         }
 
-        let dll_dst = Path::new("assets/dlls/hutao_minhook.dll");
-        if !dll_dst.exists() {
+        // hutao_minhook
+        let hutao_dll_dst = Path::new("assets/dlls/hutao_minhook.dll");
+        if !hutao_dll_dst.exists() {
             let dll_src = Path::new("target/release/hutao_minhook.dll");
             if dll_src.exists() {
-                let _ = fs::copy(dll_src, dll_dst);
+                let _ = fs::copy(dll_src, hutao_dll_dst);
             }
         }
-        if !dll_dst.exists() {
+        if !hutao_dll_dst.exists() {
             self.status = "DLL not found: hutao_minhook.dll".to_string();
+            return;
+        }
+
+        // bilibili_login
+        let bilibili_dll_dst = Path::new("assets/dlls/bilibili_login.dll");
+        if !bilibili_dll_dst.exists() {
+            let dll_src = Path::new("target/release/bilibili_login.dll");
+            if dll_src.exists() {
+                let _ = fs::copy(dll_src, bilibili_dll_dst);
+            }
+        }
+        if !bilibili_dll_dst.exists() {
+            self.status = "DLL not found: bilibili_login.dll".to_string();
             return;
         }
 
@@ -271,7 +289,7 @@ impl Launcher {
         }
 
         // DLL injection
-        match self.inject_dll(dll_dst.to_str().unwrap()) {
+        match self.inject_hutao_dll(hutao_dll_dst.to_str().unwrap()) {
             Ok(_) => {
                 self.status = "Game launched and DLL injected successfully!".to_string();
             }
@@ -280,6 +298,19 @@ impl Launcher {
                 return;
             }
         }
+
+        // TODO: Bilibili DLL injection
+        // if self.switcher.client_type == ClientType::Bilibili {
+        //     match self.inject_bilibili_dll(bilibili_dll_dst.to_str().unwrap()) {
+        //         Ok(_) => {
+        //             self.status = "Hutao and Bilibili DLL injected successfully!".to_string();
+        //         }
+        //         Err(e) => {
+        //             self.status = format!("Bilibili DLL injection failed: {e}");
+        //             return;
+        //         }
+        //     }
+        // }
     }
 
     fn create_shared_memory(&mut self) -> Result<(), String> {
@@ -338,6 +369,11 @@ impl Launcher {
         let game_dir = Path::new(exe_path).parent().unwrap();
         let game_dir_str = game_dir.to_str().unwrap();
         unsafe {
+            let env_name = "__COMPAT_LAYER\0".encode_utf16().collect::<Vec<u16>>();
+            let env_value = "RunAsInvoker\0".encode_utf16().collect::<Vec<u16>>();
+            SetEnvironmentVariableW(env_name.as_ptr(), env_value.as_ptr());
+        }
+        unsafe {
             let mut si = mem::zeroed::<STARTUPINFOA>();
             si.cb = mem::size_of::<STARTUPINFOA>() as u32;
             let mut pi = mem::zeroed::<PROCESS_INFORMATION>();
@@ -359,15 +395,15 @@ impl Launcher {
                 return Err(format!("CreateProcessA failed: {}", GetLastError()));
             }
             CloseHandle(pi.hThread);
-            self.game_process = Some(pi.hProcess);
             self.game_pid = pi.dwProcessId;
+            self.game_process = Some(pi.hProcess);
+            self.game_thread = Some(pi.hThread);
             SetPriorityClass(pi.hProcess, HIGH_PRIORITY_CLASS);
-            thread::sleep(Duration::from_secs(10));
         }
         Ok(())
     }
 
-    fn inject_dll(&self, dll_path: &str) -> Result<(), String> {
+    fn inject_hutao_dll(&self, dll_path: &str) -> Result<(), String> {
         unsafe {
             let dll_c = CString::new(dll_path).unwrap();
             let h_dll = LoadLibraryA(dll_c.as_ptr() as *const u8);
@@ -412,6 +448,57 @@ impl Launcher {
                 FreeLibrary(h_dll);
                 Err("Failed to get hook function from DLL".to_string())
             }
+        }
+    }
+
+    // TODO: Implement Bilibili DLL injection
+    fn inject_bilibili_dll(&self, dll_path: &str) -> Result<(), String> {
+        unsafe {
+            let h_process = self.game_process.unwrap();
+            let dll_path_c = CString::new(dll_path).map_err(|_| "Invalid DLL path")?;
+            let mem = VirtualAllocEx(
+                h_process,
+                ptr::null_mut(),
+                dll_path.len() + 1,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            );
+            if mem.is_null() {
+                return Err("VirtualAllocEx failed".to_string());
+            }
+            let mut written = 0;
+            let ok = WriteProcessMemory(
+                h_process,
+                mem,
+                dll_path_c.as_ptr() as *const c_void,
+                dll_path.len() + 1,
+                &mut written,
+            );
+            if ok == 0 {
+                VirtualFreeEx(h_process, mem, 0, MEM_RELEASE);
+                return Err("WriteProcessMemory failed".to_string());
+            }
+            let loadlibrary_addr = LoadLibraryA as *mut std::ffi::c_void;
+            let h_thread = CreateRemoteThread(
+                h_process,
+                ptr::null_mut(),
+                0,
+                Some(std::mem::transmute::<
+                    *mut c_void,
+                    unsafe extern "system" fn(*mut c_void) -> u32,
+                >(loadlibrary_addr)),
+                mem,
+                0,
+                ptr::null_mut(),
+            );
+            if h_thread.is_null() {
+                VirtualFreeEx(h_process, mem, 0, MEM_RELEASE);
+                return Err(format!("CreateRemoteThread failed: {}", GetLastError()));
+            }
+            WaitForSingleObject(h_thread, 5000);
+            VirtualFreeEx(h_process, mem, 0, MEM_RELEASE);
+            CloseHandle(h_thread);
+            Ok(())
         }
     }
 

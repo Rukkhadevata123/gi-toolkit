@@ -1,6 +1,5 @@
 mod client_switch;
 mod hutao_launcher;
-mod hutao_minhook;
 mod widget_test;
 use crate::hutao_launcher::Launcher as App;
 
