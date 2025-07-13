@@ -399,6 +399,7 @@ impl Launcher {
             self.game_process = Some(pi.hProcess);
             self.game_thread = Some(pi.hThread);
             SetPriorityClass(pi.hProcess, HIGH_PRIORITY_CLASS);
+            thread::sleep(Duration::from_secs(10));
         }
         Ok(())
     }
