@@ -1,16 +1,17 @@
 mod client_switch;
-mod config;
-mod launcher;
+mod hutao_launcher;
+mod hutao_minhook;
 mod widget_test;
-mod injector;
-mod bilibili_dll;
-use crate::launcher::Launcher as App;
-
-// TODO: delete this
-// All Comments and UI Tests are in English!
+use crate::hutao_launcher::Launcher as App;
 
 fn main() -> eframe::Result<()> {
-    let options = eframe::NativeOptions::default();
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([400.0, 300.0])
+            .with_maximize_button(false)
+            .with_resizable(false),
+        ..Default::default()
+    };
     eframe::run_native(
         "GI-Toolkit",
         options,

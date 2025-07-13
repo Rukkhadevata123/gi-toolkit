@@ -23,7 +23,6 @@ impl Default for ClientSwitch {
 }
 
 impl ClientSwitch {
-    #[must_use]
     pub fn switch(&mut self) -> Result<(), String> {
         let exe_path = self.game_path.trim();
         let game_dir = Path::new(exe_path).parent().ok_or("Invalid game path")?;

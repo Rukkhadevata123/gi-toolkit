@@ -212,16 +212,9 @@ impl WidgetGallery {
     }
 }
 
+#[derive(Default)]
 pub struct App {
     gallery: WidgetGallery,
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self {
-            gallery: WidgetGallery::default(),
-        }
-    }
 }
 
 impl eframe::App for App {
