@@ -78,7 +78,6 @@ struct IslandEnvironment {
     target_frame_rate: i32,
     remove_open_team_progress: i32, // BOOL
     redirect_craft_entry: i32,      // BOOL
-    hook_login_panel: i32,          // BOOL
 }
 
 // Original function pointers
@@ -390,7 +389,6 @@ pub unsafe extern "system" fn DllGetWindowsHookForHutao(p_hook_proc: *mut *mut c
 }
 
 // DLL entry point
-
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn DllMain(
     h_module: HINSTANCE,

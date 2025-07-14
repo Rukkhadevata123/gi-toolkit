@@ -1,5 +1,7 @@
 use crate::client_switch::{ClientSwitch, ClientType};
-use crate::hutao_config::{CHINESE_OFFSETS, IslandEnvironment, IslandState, SHARED_MEMORY_NAME};
+use crate::hutao_config::{
+    ASSETS_PATH, CHINESE_OFFSETS, IslandEnvironment, IslandState, SHARED_MEMORY_NAME,
+};
 use crate::process_utils::{get_main_thread_id, is_process_running, kill_process_by_name};
 use eframe::egui;
 use std::ffi::{CString, c_void};
@@ -77,7 +79,10 @@ impl Launcher {
             // persistent storage
             let response = ui.text_edit_singleline(&mut self.switcher.game_path);
             if response.changed() {
-                let _ = std::fs::write("assets/game_path.txt", &self.switcher.game_path);
+                let _ = std::fs::write(
+                    format!("{ASSETS_PATH}/game_path.txt"),
+                    &self.switcher.game_path,
+                );
             }
         });
 
@@ -226,23 +231,17 @@ impl Launcher {
     }
 
     fn launch_game(&mut self) {
-        // no need because we have DragValue with range
-        if self.target_fps < 30 {
-            self.status = "FPS must be at least 30".to_string();
-            return;
-        }
-        if self.field_of_view < 1.0 {
-            self.status = "FOV must be at least 1.0".to_string();
-            return;
-        }
+        // Clean up
+        self.cleanup();
 
-        self.switcher.game_path = std::fs::read_to_string("assets/game_path.txt")
+        self.switcher.game_path = std::fs::read_to_string(format!("{ASSETS_PATH}/game_path.txt"))
             .unwrap_or_else(|_| self.switcher.game_path.clone());
 
         let exe_path = self.switcher.game_path.trim().to_string();
 
         // hutao_minhook
-        let hutao_dll_dst = Path::new("assets/dlls/hutao_minhook.dll");
+        let path_str = format!("{ASSETS_PATH}/dlls/hutao_minhook.dll");
+        let hutao_dll_dst = Path::new(path_str.as_str());
         if !hutao_dll_dst.exists() {
             let dll_src = Path::new("target/release/hutao_minhook.dll");
             if dll_src.exists() {
@@ -255,7 +254,8 @@ impl Launcher {
         }
 
         // bilibili_login
-        let bilibili_dll_dst = Path::new("assets/dlls/bilibili_login.dll");
+        let path_str = format!("{ASSETS_PATH}/dlls/bilibili_login.dll");
+        let bilibili_dll_dst = Path::new(path_str.as_str());
         if !bilibili_dll_dst.exists() {
             let dll_src = Path::new("target/release/bilibili_login.dll");
             if dll_src.exists() {
@@ -438,6 +438,9 @@ impl Launcher {
     fn configure_environment(&mut self) {
         if let Some(ptr) = self.shared_mem_ptr {
             unsafe {
+                // Zero out the memory
+                std::ptr::write_bytes(ptr, 0, 1);
+
                 let env = &mut *ptr;
                 env.function_offsets = CHINESE_OFFSETS;
                 env.field_of_view = self.field_of_view;

@@ -1,3 +1,4 @@
+use crate::hutao_config::ASSETS_PATH;
 use std::fs::read_to_string;
 use std::io::Read;
 use std::path::Path;
@@ -16,9 +17,12 @@ pub struct ClientSwitch {
 impl Default for ClientSwitch {
     fn default() -> Self {
         Self {
-            game_path: read_to_string("assets/game_path.txt").unwrap_or_else(|_| {
-                "D:\\Program Files\\Genshin Impact\\Genshin Impact Game\\YuanShen.exe".to_string()
-            }),
+            game_path: read_to_string(format!("{ASSETS_PATH}/game_path.txt")).unwrap_or_else(
+                |_| {
+                    "D:\\Program Files\\Genshin Impact\\Genshin Impact Game\\YuanShen.exe"
+                        .to_string()
+                },
+            ),
             client_type: ClientType::Official,
         }
     }
@@ -60,7 +64,8 @@ impl ClientSwitch {
                 .join("Plugins")
                 .join("PCGameSDK.dll");
             let pkg_path = game_dir.join("sdk_pkg_version");
-            let assets_dir = Path::new("./assets/switch");
+            let path_string = format!("{ASSETS_PATH}/switch");
+            let assets_dir = Path::new(&path_string);
 
             if !sdk_path.exists() {
                 let src_sdk = assets_dir

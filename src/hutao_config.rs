@@ -47,3 +47,5 @@ pub const CHINESE_OFFSETS: FunctionOffsets = FunctionOffsets {
     craft_entry: 127845632,
     craft_entry_partner: 201143472,
 };
+
+pub const ASSETS_PATH: &str = "../assets";
