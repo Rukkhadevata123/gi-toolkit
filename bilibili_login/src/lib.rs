@@ -15,7 +15,7 @@ extern "stdcall" fn hook_login(
     _back_to_login: bool,
     callback: LoginCallBackHandler,
 ) -> i32 {
-    let data = match fs::read_to_string("login.json") {
+    let data = match fs::read_to_string("assets/login.json") {
         Ok(content) => content.lines().next().unwrap_or("").trim().to_string(),
         Err(_) => {
             let error_data = r#"{"code":-1,"data":{"message":"file not found"}}"#;
@@ -57,24 +57,13 @@ extern "system" fn new_load_library_w(file_name: *const u16) -> HMODULE {
         return module;
     }
 
-    let file_name_string = unsafe {
-        let mut len = 0;
-        while *file_name.add(len) != 0 {
-            len += 1;
-        }
-        let slice = std::slice::from_raw_parts(file_name, len);
-        String::from_utf16_lossy(slice)
-    };
+    let func_name = CString::new("SDKShowLoginPanel").unwrap();
+    let sdk_login_func = unsafe { GetProcAddress(module, func_name.as_ptr() as *const u8) };
 
-    if file_name_string.contains("PCGameSDK.dll") {
-        let func_name = CString::new("SDKShowLoginPanel").unwrap();
-        let sdk_login_func = unsafe { GetProcAddress(module, func_name.as_ptr() as *const u8) };
-
-        if let Some(func_ptr) = sdk_login_func {
-            let target = func_ptr as *mut c_void;
-            if create_hook(target, hook_login as *mut c_void).is_ok() {
-                let _ = enable_hook(target);
-            }
+    if let Some(func_ptr) = sdk_login_func {
+        let target = func_ptr as *mut c_void;
+        if create_hook(target, hook_login as *mut c_void).is_ok() {
+            let _ = enable_hook(target);
         }
     }
 

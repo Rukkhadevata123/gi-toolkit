@@ -1,3 +1,4 @@
+use std::fs::read_to_string;
 use std::io::Read;
 use std::path::Path;
 
@@ -15,8 +16,9 @@ pub struct ClientSwitch {
 impl Default for ClientSwitch {
     fn default() -> Self {
         Self {
-            game_path: "D:\\Program Files\\Genshin Impact\\Genshin Impact Game\\YuanShen.exe"
-                .to_string(),
+            game_path: read_to_string("assets/game_path.txt").unwrap_or_else(|_| {
+                "D:\\Program Files\\Genshin Impact\\Genshin Impact Game\\YuanShen.exe".to_string()
+            }),
             client_type: ClientType::Official,
         }
     }

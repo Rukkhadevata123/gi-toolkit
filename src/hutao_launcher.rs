@@ -1,4 +1,6 @@
 use crate::client_switch::{ClientSwitch, ClientType};
+use crate::hutao_config::{CHINESE_OFFSETS, IslandEnvironment, IslandState, SHARED_MEMORY_NAME};
+use crate::process_utils::{get_main_thread_id, is_process_running, kill_process_by_name};
 use eframe::egui;
 use std::ffi::{CString, c_void};
 use std::fs;
@@ -10,62 +12,11 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Security::*;
 use windows_sys::Win32::System::Diagnostics::Debug::*;
-use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
 use windows_sys::Win32::System::Environment::*;
 use windows_sys::Win32::System::LibraryLoader::*;
 use windows_sys::Win32::System::Memory::*;
 use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct FunctionOffsets {
-    pub find_string: u32,
-    pub set_field_of_view: u32,
-    pub set_enable_fog_rendering: u32,
-    pub set_target_frame_rate: u32,
-    pub open_team: u32,
-    pub open_team_page_accordingly: u32,
-    pub check_can_enter: u32,
-    pub craft_entry: u32,
-    pub craft_entry_partner: u32,
-}
-
-#[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum IslandState {
-    None = 0,
-    Error = 1,
-    Started = 2,
-    Stopped = 3,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct IslandEnvironment {
-    pub state: IslandState,
-    pub last_error: u32,
-    pub function_offsets: FunctionOffsets,
-    pub field_of_view: f32,
-    pub fix_low_fov_scene: i32, // BOOL
-    pub disable_fog: i32,       // BOOL
-    pub target_frame_rate: i32,
-    pub remove_open_team_progress: i32, // BOOL
-    pub redirect_craft_entry: i32,      // BOOL
-}
-
-const SHARED_MEMORY_NAME: &str = "4F3E8543-40F7-4808-82DC-21E48A6037A7";
-const CHINESE_OFFSETS: FunctionOffsets = FunctionOffsets {
-    find_string: 4830752,
-    set_field_of_view: 17204528,
-    set_enable_fog_rendering: 277807600,
-    set_target_frame_rate: 277729120,
-    open_team: 118414576,
-    open_team_page_accordingly: 118384496,
-    check_can_enter: 156982512,
-    craft_entry: 127845632,
-    craft_entry_partner: 201143472,
-};
 
 pub struct Launcher {
     pub switcher: ClientSwitch,
@@ -76,6 +27,7 @@ pub struct Launcher {
     pub fix_low_fov: bool,
     pub remove_team_anim: bool,
     pub redirect_craft: bool,
+    pub hook_login_panel: bool,
     // Inner state
     shared_mem_handle: Option<HANDLE>,
     shared_mem_ptr: Option<*mut IslandEnvironment>,
@@ -95,6 +47,7 @@ impl Default for Launcher {
             fix_low_fov: false,
             remove_team_anim: true,
             redirect_craft: true,
+            hook_login_panel: false,
             shared_mem_handle: None,
             shared_mem_ptr: None,
             game_pid: 0,
@@ -121,7 +74,11 @@ impl Launcher {
 
         ui.horizontal(|ui| {
             ui.label("Game Path:");
-            ui.text_edit_singleline(&mut self.switcher.game_path);
+            // persistent storage
+            let response = ui.text_edit_singleline(&mut self.switcher.game_path);
+            if response.changed() {
+                let _ = std::fs::write("assets/game_path.txt", &self.switcher.game_path);
+            }
         });
 
         ui.horizontal(|ui| {
@@ -136,6 +93,15 @@ impl Launcher {
                 "Bilibili",
             );
         });
+
+        if self.switcher.client_type == ClientType::Bilibili {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.hook_login_panel, "Hook Login Panel?");
+                if ui.button("usage").clicked() {
+                    self.status = "usage_popup".to_string();
+                }
+            });
+        }
 
         ui.separator();
 
@@ -158,7 +124,18 @@ impl Launcher {
 
         ui.horizontal(|ui| {
             if ui.button("Launch Game").clicked() {
-                self.launch_game();
+                let exe_path = self.switcher.game_path.trim().to_string();
+                let proc_name = Path::new(&exe_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("YuanShen.exe");
+                let process_found = is_process_running(proc_name);
+
+                if process_found {
+                    self.status = "confirm_kill_popup".to_string();
+                } else {
+                    self.launch_game();
+                }
             }
             if ui.button("Apply").clicked() {
                 self.apply_settings();
@@ -175,6 +152,30 @@ impl Launcher {
             }
         });
 
+        if self.status == "confirm_kill_popup" {
+            egui::Window::new("Confirm Termination")
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label("The game process is running.\nThis will terminate game process, do you want to continue?");
+                    ui.horizontal(|ui| {
+                        if ui.button("Yes").clicked() {
+                            let exe_path = self.switcher.game_path.trim().to_string();
+                            let proc_name = Path::new(&exe_path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("YuanShen.exe");
+                            let _ = kill_process_by_name(proc_name);
+                            self.status.clear();
+                            self.launch_game();
+                        }
+                        if ui.button("No").clicked() {
+                            self.status.clear();
+                        }
+                    });
+                });
+        }
+
         if self.status == "about_popup" {
             egui::Window::new("About GI-Toolkit")
                 .collapsible(false)
@@ -182,10 +183,36 @@ impl Launcher {
                 .show(ui.ctx(), |ui| {
                     ui.label(
                         "GI-Toolkit v1.0\n\n\
+                        Acknowledge: https://github.com/DGP-Studio/Snap.Hutao\n\n\
                         Copyright (c) 2025 Yoimiya\n\
                         MIT License\n\
-                        https://github.com/Rukkhadevata123/min_hook_rs\n\n\
+                        https://github.com/Rukkhadevata123/min_hook_rs\n\
+                        https://github.com/Rukkhadevata123/gi-toolkit\n\n\
                         This software is provided \"as is\", without warranty of any kind.",
+                    );
+                    if ui.button("Close").clicked() {
+                        self.status.clear();
+                    }
+                });
+        }
+
+        if self.status == "usage_popup" {
+            egui::Window::new("Bilibili Login DLL Usage")
+                .collapsible(false)
+                .resizable(true)
+                .show(ui.ctx(), |ui| {
+                    ui.label(
+                        "Acknowledge: https://github.com/QiE2035/gs_bili\n\
+                        \n\
+                        Usage:\n\
+                        1. Open the following URL in your browser:\n\
+                           https://sdk.biligame.com/login/?gameId=4963&appKey=fd1098c0489c4d00a08aa8a15e484d6c&sdk_ver=3.5.0\n\
+                        2. Press F12 to open the browser console, then enter:\n\
+                           loginSuccess=(data)=>{console.log(JSON.parse(data))}\n\
+                        3. Log in with your Bilibili account. After login, copy the JSON data shown in the console.\n\
+                        4. Save the JSON data as a single line in a file named login.json (UTF-8 encoding).\n\
+                        5. Place login.json in the assets folder of GI-Toolkit.\n\
+                        6. For more details, see README or source code comments."
                     );
                     if ui.button("Close").clicked() {
                         self.status.clear();
@@ -209,20 +236,10 @@ impl Launcher {
             return;
         }
 
-        let exe_path = self.switcher.game_path.trim().to_string();
-        let proc_name = Path::new(&exe_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("YuanShen.exe");
+        self.switcher.game_path = std::fs::read_to_string("assets/game_path.txt")
+            .unwrap_or_else(|_| self.switcher.game_path.clone());
 
-        if self.switcher.client_type == ClientType::Bilibili {
-            let game_dir = Path::new(&exe_path).parent().unwrap();
-            let login_src = Path::new("assets/login.json");
-            let login_dst = game_dir.join("login.json");
-            if login_src.exists() {
-                let _ = fs::copy(login_src, &login_dst);
-            }
-        }
+        let exe_path = self.switcher.game_path.trim().to_string();
 
         // hutao_minhook
         let hutao_dll_dst = Path::new("assets/dlls/hutao_minhook.dll");
@@ -250,16 +267,6 @@ impl Launcher {
             return;
         }
 
-        match kill_process_by_name(proc_name) {
-            Ok(_) => {}
-            Err(e) => {
-                if e != "Process not found" {
-                    self.status = format!("Failed to kill process: {e}");
-                    return;
-                }
-            }
-        }
-
         // Switch client if needed
         let switch_result = self.switcher.switch();
         if let Err(e) = switch_result {
@@ -267,50 +274,129 @@ impl Launcher {
             return;
         }
 
-        // Create shared memory
-        match self.create_shared_memory() {
-            Ok(_) => {}
-            Err(e) => {
-                self.status = format!("Failed to create shared memory: {e}");
+        let game_dir = Path::new(&exe_path).parent().unwrap();
+        let game_dir_str = game_dir.to_str().unwrap();
+        unsafe {
+            let env_name = "__COMPAT_LAYER\0".encode_utf16().collect::<Vec<u16>>();
+            let env_value = "RunAsInvoker\0".encode_utf16().collect::<Vec<u16>>();
+            SetEnvironmentVariableW(env_name.as_ptr(), env_value.as_ptr());
+
+            let mut si = mem::zeroed::<STARTUPINFOA>();
+            si.cb = mem::size_of::<STARTUPINFOA>() as u32;
+            let mut pi = mem::zeroed::<PROCESS_INFORMATION>();
+            let exe_c = CString::new(exe_path.clone()).unwrap();
+            let dir_c = CString::new(game_dir_str).unwrap();
+            let ok = CreateProcessA(
+                exe_c.as_ptr() as *const u8,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                FALSE,
+                CREATE_SUSPENDED,
+                ptr::null_mut(),
+                dir_c.as_ptr() as *const u8,
+                &mut si,
+                &mut pi,
+            );
+            if ok == 0 {
+                self.status = format!("CreateProcessA failed: {}", GetLastError());
                 return;
             }
-        }
+            self.game_pid = pi.dwProcessId;
+            self.game_process = Some(pi.hProcess);
+            self.game_thread = Some(pi.hThread);
 
-        // Configure environment
-        self.configure_environment();
+            if self.switcher.client_type == ClientType::Bilibili && self.hook_login_panel {
+                let dll_path_c = CString::new(bilibili_dll_dst.to_str().unwrap()).unwrap();
+                let mem = VirtualAllocEx(
+                    pi.hProcess,
+                    ptr::null_mut(),
+                    bilibili_dll_dst.to_str().unwrap().len() + 1,
+                    MEM_COMMIT | MEM_RESERVE,
+                    PAGE_READWRITE,
+                );
+                if mem.is_null() {
+                    self.status = "VirtualAllocEx failed (bilibili)".to_string();
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    return;
+                }
+                let mut written = 0;
+                let ok = WriteProcessMemory(
+                    pi.hProcess,
+                    mem,
+                    dll_path_c.as_ptr() as *const c_void,
+                    bilibili_dll_dst.to_str().unwrap().len() + 1,
+                    &mut written,
+                );
+                if ok == 0 {
+                    VirtualFreeEx(pi.hProcess, mem, 0, MEM_RELEASE);
+                    self.status = "WriteProcessMemory failed (bilibili)".to_string();
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    return;
+                }
+                let h_thread = CreateRemoteThread(
+                    pi.hProcess,
+                    ptr::null_mut(),
+                    0,
+                    Some(std::mem::transmute::<
+                        *mut c_void,
+                        unsafe extern "system" fn(*mut c_void) -> u32,
+                    >(LoadLibraryA as *mut c_void)),
+                    mem,
+                    0,
+                    ptr::null_mut(),
+                );
+                if h_thread.is_null() {
+                    VirtualFreeEx(pi.hProcess, mem, 0, MEM_RELEASE);
+                    self.status =
+                        format!("CreateRemoteThread failed (bilibili): {}", GetLastError());
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    return;
+                }
+                WaitForSingleObject(h_thread, INFINITE);
+                VirtualFreeEx(pi.hProcess, mem, 0, MEM_RELEASE);
+                CloseHandle(h_thread);
+            }
 
-        // Launch game process
-        match self.launch_game_process(&exe_path) {
-            Ok(_) => {}
-            Err(e) => {
-                self.status = format!("Failed to launch game: {e}");
+            if ResumeThread(pi.hThread) == u32::MAX {
+                self.status = "ResumeThread failed".to_string();
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
                 return;
             }
-        }
+            CloseHandle(pi.hThread);
 
-        // DLL injection
-        match self.inject_hutao_dll(hutao_dll_dst.to_str().unwrap()) {
-            Ok(_) => {
-                self.status = "Game launched and DLL injected successfully!".to_string();
+            // Create shared memory
+            match self.create_shared_memory() {
+                Ok(_) => {}
+                Err(e) => {
+                    self.status = format!("Failed to create shared memory: {e}");
+                    return;
+                }
             }
-            Err(e) => {
-                self.status = format!("DLL injection failed: {e}");
-                return;
+
+            // Configure environment
+            self.configure_environment();
+
+            thread::sleep(Duration::from_secs(10));
+
+            self.game_pid = pi.dwProcessId;
+            self.game_process = Some(pi.hProcess);
+            let hutao_result = self.inject_hutao_dll(hutao_dll_dst.to_str().unwrap());
+            match hutao_result {
+                Ok(_) => {
+                    self.status = "Game launched, DLLs injected successfully!".to_string();
+                }
+                Err(e) => {
+                    self.status = format!("Hutao DLL injection failed: {e}");
+                    CloseHandle(pi.hProcess);
+                    self.game_process = None;
+                }
             }
         }
-
-        // TODO: Bilibili DLL injection
-        // if self.switcher.client_type == ClientType::Bilibili {
-        //     match self.inject_bilibili_dll(bilibili_dll_dst.to_str().unwrap()) {
-        //         Ok(_) => {
-        //             self.status = "Hutao and Bilibili DLL injected successfully!".to_string();
-        //         }
-        //         Err(e) => {
-        //             self.status = format!("Bilibili DLL injection failed: {e}");
-        //             return;
-        //         }
-        //     }
-        // }
     }
 
     fn create_shared_memory(&mut self) -> Result<(), String> {
@@ -365,45 +451,6 @@ impl Launcher {
         }
     }
 
-    fn launch_game_process(&mut self, exe_path: &str) -> Result<(), String> {
-        let game_dir = Path::new(exe_path).parent().unwrap();
-        let game_dir_str = game_dir.to_str().unwrap();
-        unsafe {
-            let env_name = "__COMPAT_LAYER\0".encode_utf16().collect::<Vec<u16>>();
-            let env_value = "RunAsInvoker\0".encode_utf16().collect::<Vec<u16>>();
-            SetEnvironmentVariableW(env_name.as_ptr(), env_value.as_ptr());
-        }
-        unsafe {
-            let mut si = mem::zeroed::<STARTUPINFOA>();
-            si.cb = mem::size_of::<STARTUPINFOA>() as u32;
-            let mut pi = mem::zeroed::<PROCESS_INFORMATION>();
-            let exe_c = CString::new(exe_path).unwrap();
-            let dir_c = CString::new(game_dir_str).unwrap();
-            let ok = CreateProcessA(
-                exe_c.as_ptr() as *const u8,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                FALSE,
-                0,
-                ptr::null_mut(),
-                dir_c.as_ptr() as *const u8,
-                &mut si,
-                &mut pi,
-            );
-            if ok == 0 {
-                return Err(format!("CreateProcessA failed: {}", GetLastError()));
-            }
-            CloseHandle(pi.hThread);
-            self.game_pid = pi.dwProcessId;
-            self.game_process = Some(pi.hProcess);
-            self.game_thread = Some(pi.hThread);
-            SetPriorityClass(pi.hProcess, HIGH_PRIORITY_CLASS);
-            thread::sleep(Duration::from_secs(10));
-        }
-        Ok(())
-    }
-
     fn inject_hutao_dll(&self, dll_path: &str) -> Result<(), String> {
         unsafe {
             let dll_c = CString::new(dll_path).unwrap();
@@ -452,57 +499,6 @@ impl Launcher {
         }
     }
 
-    // TODO: Implement Bilibili DLL injection
-    fn inject_bilibili_dll(&self, dll_path: &str) -> Result<(), String> {
-        unsafe {
-            let h_process = self.game_process.unwrap();
-            let dll_path_c = CString::new(dll_path).map_err(|_| "Invalid DLL path")?;
-            let mem = VirtualAllocEx(
-                h_process,
-                ptr::null_mut(),
-                dll_path.len() + 1,
-                MEM_COMMIT | MEM_RESERVE,
-                PAGE_READWRITE,
-            );
-            if mem.is_null() {
-                return Err("VirtualAllocEx failed".to_string());
-            }
-            let mut written = 0;
-            let ok = WriteProcessMemory(
-                h_process,
-                mem,
-                dll_path_c.as_ptr() as *const c_void,
-                dll_path.len() + 1,
-                &mut written,
-            );
-            if ok == 0 {
-                VirtualFreeEx(h_process, mem, 0, MEM_RELEASE);
-                return Err("WriteProcessMemory failed".to_string());
-            }
-            let loadlibrary_addr = LoadLibraryA as *mut std::ffi::c_void;
-            let h_thread = CreateRemoteThread(
-                h_process,
-                ptr::null_mut(),
-                0,
-                Some(std::mem::transmute::<
-                    *mut c_void,
-                    unsafe extern "system" fn(*mut c_void) -> u32,
-                >(loadlibrary_addr)),
-                mem,
-                0,
-                ptr::null_mut(),
-            );
-            if h_thread.is_null() {
-                VirtualFreeEx(h_process, mem, 0, MEM_RELEASE);
-                return Err(format!("CreateRemoteThread failed: {}", GetLastError()));
-            }
-            WaitForSingleObject(h_thread, 5000);
-            VirtualFreeEx(h_process, mem, 0, MEM_RELEASE);
-            CloseHandle(h_thread);
-            Ok(())
-        }
-    }
-
     pub fn apply_settings(&mut self) {
         // just update the settings
         self.configure_environment();
@@ -545,94 +541,5 @@ impl Launcher {
                 self.game_process = None;
             }
         }
-    }
-}
-
-pub fn kill_process_by_name(proc_name: &str) -> Result<(), String> {
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot == INVALID_HANDLE_VALUE {
-            return Err("CreateToolhelp32Snapshot failed".to_string());
-        }
-        let mut entry: PROCESSENTRY32W = mem::zeroed();
-        entry.dwSize = mem::size_of::<PROCESSENTRY32W>() as u32;
-        let mut found = false;
-        if Process32FirstW(snapshot, &mut entry) != 0 {
-            loop {
-                let exe_name = String::from_utf16_lossy(&entry.szExeFile);
-                let exe_name = exe_name.trim_end_matches('\0');
-                if exe_name.eq_ignore_ascii_case(proc_name) {
-                    let h_process = OpenProcess(PROCESS_TERMINATE, 0, entry.th32ProcessID);
-                    if !h_process.is_null() && h_process != INVALID_HANDLE_VALUE {
-                        TerminateProcess(h_process, 0);
-                        CloseHandle(h_process);
-                        found = true;
-                    }
-                }
-                if Process32NextW(snapshot, &mut entry) == 0 {
-                    break;
-                }
-            }
-        }
-        CloseHandle(snapshot);
-        if found {
-            Ok(())
-        } else {
-            Err("Process not found".to_string())
-        }
-    }
-}
-
-fn get_main_thread_id(process_id: u32) -> u32 {
-    unsafe {
-        let h_snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-        if h_snapshot == INVALID_HANDLE_VALUE {
-            return 0;
-        }
-        let mut te32 = THREADENTRY32 {
-            dwSize: mem::size_of::<THREADENTRY32>() as u32,
-            ..mem::zeroed()
-        };
-        let mut thread_id = 0u32;
-        let mut earliest_time = FILETIME {
-            dwLowDateTime: u32::MAX,
-            dwHighDateTime: u32::MAX,
-        };
-        if Thread32First(h_snapshot, &mut te32) != 0 {
-            loop {
-                if te32.th32OwnerProcessID == process_id {
-                    let h_thread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, te32.th32ThreadID);
-                    if !h_thread.is_null() {
-                        let mut creation_time = mem::zeroed();
-                        let mut exit_time = mem::zeroed();
-                        let mut kernel_time = mem::zeroed();
-                        let mut user_time = mem::zeroed();
-                        if GetThreadTimes(
-                            h_thread,
-                            &mut creation_time,
-                            &mut exit_time,
-                            &mut kernel_time,
-                            &mut user_time,
-                        ) != 0
-                        {
-                            let creation_u64 = ((creation_time.dwHighDateTime as u64) << 32)
-                                | (creation_time.dwLowDateTime as u64);
-                            let earliest_u64 = ((earliest_time.dwHighDateTime as u64) << 32)
-                                | (earliest_time.dwLowDateTime as u64);
-                            if creation_u64 < earliest_u64 {
-                                earliest_time = creation_time;
-                                thread_id = te32.th32ThreadID;
-                            }
-                        }
-                        CloseHandle(h_thread);
-                    }
-                }
-                if Thread32Next(h_snapshot, &mut te32) == 0 {
-                    break;
-                }
-            }
-        }
-        CloseHandle(h_snapshot);
-        thread_id
     }
 }

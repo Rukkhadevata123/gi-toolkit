@@ -33,8 +33,3 @@ members = [
     "hutao_minhook",
     "bilibili_login"
 ]
-
-# TODO: remove this
-[[example]]
-name = "bilibili_injector"
-path = "tmp/bilibili/genshin_bili_injector.rs"
