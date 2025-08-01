@@ -19,9 +19,3 @@
   ```
 
 - The above is just an example. The key point is: the `assets` folder must be in the parent directory of your working directory (the directory where you run `gi-toolkit.exe`).
-- For details on using the Bilibili login feature, please refer to the "usage" button in the program.
-- Example `login.json` (single line):
-
-  ```json
-  {"code":0,"data":{"access_key":"qwertyuiop_t1","game_id":"4963","uid":2147483647,"uname":"A Cool Name"}}
-  ```

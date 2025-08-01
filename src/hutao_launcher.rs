@@ -13,7 +13,6 @@ use std::thread;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Security::*;
-use windows_sys::Win32::System::Diagnostics::Debug::*;
 use windows_sys::Win32::System::Environment::*;
 use windows_sys::Win32::System::LibraryLoader::*;
 use windows_sys::Win32::System::Memory::*;
@@ -29,7 +28,6 @@ pub struct Launcher {
     pub fix_low_fov: bool,
     pub remove_team_anim: bool,
     pub redirect_craft: bool,
-    pub hook_login_panel: bool,
     // Inner state
     shared_mem_handle: Option<HANDLE>,
     shared_mem_ptr: Option<*mut IslandEnvironment>,
@@ -49,7 +47,6 @@ impl Default for Launcher {
             fix_low_fov: false,
             remove_team_anim: true,
             redirect_craft: true,
-            hook_login_panel: false,
             shared_mem_handle: None,
             shared_mem_ptr: None,
             game_pid: 0,
@@ -98,15 +95,6 @@ impl Launcher {
                 "Bilibili",
             );
         });
-
-        if self.switcher.client_type == ClientType::Bilibili {
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.hook_login_panel, "Hook Login Panel?");
-                if ui.button("usage").clicked() {
-                    self.status = "usage_popup".to_string();
-                }
-            });
-        }
 
         ui.separator();
 
@@ -201,31 +189,7 @@ impl Launcher {
                 });
         }
 
-        if self.status == "usage_popup" {
-            egui::Window::new("Bilibili Login DLL Usage")
-                .collapsible(false)
-                .resizable(true)
-                .show(ui.ctx(), |ui| {
-                    ui.label(
-                        "Acknowledge: https://github.com/QiE2035/gs_bili\n\
-                        \n\
-                        Usage:\n\
-                        1. Open the following URL in your browser:\n\
-                           https://sdk.biligame.com/login/?gameId=4963&appKey=fd1098c0489c4d00a08aa8a15e484d6c&sdk_ver=3.5.0\n\
-                        2. Press F12 to open the browser console, then enter:\n\
-                           loginSuccess=(data)=>{console.log(JSON.parse(data))}\n\
-                        3. Log in with your Bilibili account. After login, copy the JSON data shown in the console.\n\
-                        4. Save the JSON data as a single line in a file named login.json (UTF-8 encoding).\n\
-                        5. Place login.json in the assets folder of GI-Toolkit.\n\
-                        6. For more details, see README or source code comments."
-                    );
-                    if ui.button("Close").clicked() {
-                        self.status.clear();
-                    }
-                });
-        }
-
-        if !self.status.is_empty() && self.status != "about_popup" && self.status != "usage_popup" {
+        if !self.status.is_empty() && self.status != "about_popup" {
             ui.label(&self.status);
         }
     }
@@ -253,20 +217,6 @@ impl Launcher {
             return;
         }
 
-        // bilibili_login
-        let path_str = format!("{ASSETS_PATH}/dlls/bilibili_login.dll");
-        let bilibili_dll_dst = Path::new(path_str.as_str());
-        if !bilibili_dll_dst.exists() {
-            let dll_src = Path::new("target/release/bilibili_login.dll");
-            if dll_src.exists() {
-                let _ = fs::copy(dll_src, bilibili_dll_dst);
-            }
-        }
-        if !bilibili_dll_dst.exists() {
-            self.status = "DLL not found: bilibili_login.dll".to_string();
-            return;
-        }
-
         // Switch client if needed
         let switch_result = self.switcher.switch();
         if let Err(e) = switch_result {
@@ -284,15 +234,20 @@ impl Launcher {
             let mut si = mem::zeroed::<STARTUPINFOA>();
             si.cb = mem::size_of::<STARTUPINFOA>() as u32;
             let mut pi = mem::zeroed::<PROCESS_INFORMATION>();
-            let exe_c = CString::new(exe_path.clone()).unwrap();
+
+            // Launch options
+            let launch_args = "";
+            let cmd_line = format!("\"{exe_path}\" {launch_args}");
+            let cmd_line_c = CString::new(cmd_line).unwrap();
             let dir_c = CString::new(game_dir_str).unwrap();
+
             let ok = CreateProcessA(
-                exe_c.as_ptr() as *const u8,
-                ptr::null_mut(),
+                ptr::null(),
+                cmd_line_c.as_ptr() as *mut u8,
                 ptr::null_mut(),
                 ptr::null_mut(),
                 FALSE,
-                CREATE_SUSPENDED,
+                0,
                 ptr::null_mut(),
                 dir_c.as_ptr() as *const u8,
                 &mut si,
@@ -306,67 +261,6 @@ impl Launcher {
             self.game_process = Some(pi.hProcess);
             self.game_thread = Some(pi.hThread);
 
-            if self.switcher.client_type == ClientType::Bilibili && self.hook_login_panel {
-                let dll_path_c = CString::new(bilibili_dll_dst.to_str().unwrap()).unwrap();
-                let mem = VirtualAllocEx(
-                    pi.hProcess,
-                    ptr::null_mut(),
-                    bilibili_dll_dst.to_str().unwrap().len() + 1,
-                    MEM_COMMIT | MEM_RESERVE,
-                    PAGE_READWRITE,
-                );
-                if mem.is_null() {
-                    self.status = "VirtualAllocEx failed (bilibili)".to_string();
-                    CloseHandle(pi.hThread);
-                    CloseHandle(pi.hProcess);
-                    return;
-                }
-                let mut written = 0;
-                let ok = WriteProcessMemory(
-                    pi.hProcess,
-                    mem,
-                    dll_path_c.as_ptr() as *const c_void,
-                    bilibili_dll_dst.to_str().unwrap().len() + 1,
-                    &mut written,
-                );
-                if ok == 0 {
-                    VirtualFreeEx(pi.hProcess, mem, 0, MEM_RELEASE);
-                    self.status = "WriteProcessMemory failed (bilibili)".to_string();
-                    CloseHandle(pi.hThread);
-                    CloseHandle(pi.hProcess);
-                    return;
-                }
-                let h_thread = CreateRemoteThread(
-                    pi.hProcess,
-                    ptr::null_mut(),
-                    0,
-                    Some(std::mem::transmute::<
-                        *mut c_void,
-                        unsafe extern "system" fn(*mut c_void) -> u32,
-                    >(LoadLibraryA as *mut c_void)),
-                    mem,
-                    0,
-                    ptr::null_mut(),
-                );
-                if h_thread.is_null() {
-                    VirtualFreeEx(pi.hProcess, mem, 0, MEM_RELEASE);
-                    self.status =
-                        format!("CreateRemoteThread failed (bilibili): {}", GetLastError());
-                    CloseHandle(pi.hThread);
-                    CloseHandle(pi.hProcess);
-                    return;
-                }
-                WaitForSingleObject(h_thread, INFINITE);
-                VirtualFreeEx(pi.hProcess, mem, 0, MEM_RELEASE);
-                CloseHandle(h_thread);
-            }
-
-            if ResumeThread(pi.hThread) == u32::MAX {
-                self.status = "ResumeThread failed".to_string();
-                CloseHandle(pi.hThread);
-                CloseHandle(pi.hProcess);
-                return;
-            }
             CloseHandle(pi.hThread);
 
             // Create shared memory
@@ -388,7 +282,7 @@ impl Launcher {
             let hutao_result = self.inject_hutao_dll(hutao_dll_dst.to_str().unwrap());
             match hutao_result {
                 Ok(_) => {
-                    self.status = "Game launched, DLLs injected successfully!".to_string();
+                    self.status = "Game launched, DLL injected successfully!".to_string();
                 }
                 Err(e) => {
                     self.status = format!("Hutao DLL injection failed: {e}");

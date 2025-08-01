@@ -37,15 +37,15 @@ pub struct IslandEnvironment {
 
 pub const SHARED_MEMORY_NAME: &str = "4F3E8543-40F7-4808-82DC-21E48A6037A7";
 pub const CHINESE_OFFSETS: FunctionOffsets = FunctionOffsets {
-    find_string: 4830752,
-    set_field_of_view: 17204528,
-    set_enable_fog_rendering: 277807600,
-    set_target_frame_rate: 277729120,
-    open_team: 118414576,
-    open_team_page_accordingly: 118384496,
-    check_can_enter: 156982512,
-    craft_entry: 127845632,
-    craft_entry_partner: 201143472,
+    find_string: 4993584,
+    set_field_of_view: 17468464,
+    set_enable_fog_rendering: 280284672,
+    set_target_frame_rate: 280206048,
+    open_team: 171588976,
+    open_team_page_accordingly: 171470064,
+    check_can_enter: 209449984,
+    craft_entry: 177556768,
+    craft_entry_partner: 99470272,
 };
 
 pub const ASSETS_PATH: &str = "../assets";

@@ -58,27 +58,29 @@ impl ClientSwitch {
         let new_content = lines.join("\n");
         std::fs::write(&config_path, new_content).map_err(|_| "Failed to write config.ini")?;
 
-        if self.client_type == ClientType::Bilibili {
-            let sdk_path = game_dir
-                .join("YuanShen_Data")
-                .join("Plugins")
-                .join("PCGameSDK.dll");
-            let pkg_path = game_dir.join("sdk_pkg_version");
-            let path_string = format!("{ASSETS_PATH}/switch");
-            let assets_dir = Path::new(&path_string);
+        // TODO: Implement new client switch logic
+        // Legacy switch
+        // if self.client_type == ClientType::Bilibili {
+        //     let sdk_path = game_dir
+        //         .join("YuanShen_Data")
+        //         .join("Plugins")
+        //         .join("PCGameSDK.dll");
+        //     let pkg_path = game_dir.join("sdk_pkg_version");
+        //     let path_string = format!("{ASSETS_PATH}/switch");
+        //     let assets_dir = Path::new(&path_string);
 
-            if !sdk_path.exists() {
-                let src_sdk = assets_dir
-                    .join("YuanShen_Data")
-                    .join("Plugins")
-                    .join("PCGameSDK.dll");
-                std::fs::copy(src_sdk, sdk_path).map_err(|_| "Failed to copy PCGameSDK.dll")?;
-            }
-            if !pkg_path.exists() {
-                let src_pkg = assets_dir.join("sdk_pkg_version");
-                std::fs::copy(src_pkg, pkg_path).map_err(|_| "Failed to copy sdk_pkg_version")?;
-            }
-        }
+        //     if !sdk_path.exists() {
+        //         let src_sdk = assets_dir
+        //             .join("YuanShen_Data")
+        //             .join("Plugins")
+        //             .join("PCGameSDK.dll");
+        //         std::fs::copy(src_sdk, sdk_path).map_err(|_| "Failed to copy PCGameSDK.dll")?;
+        //     }
+        //     if !pkg_path.exists() {
+        //         let src_pkg = assets_dir.join("sdk_pkg_version");
+        //         std::fs::copy(src_pkg, pkg_path).map_err(|_| "Failed to copy sdk_pkg_version")?;
+        //     }
+        // }
         Ok(())
     }
 }

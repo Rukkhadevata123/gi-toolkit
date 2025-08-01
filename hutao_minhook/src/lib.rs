@@ -1,3 +1,5 @@
+//! Acknowledgement: <https://github.com/DGP-Studio/UnlockerIsland>
+
 use min_hook_rs::*;
 use std::ffi::{CString, c_void};
 use std::mem;
